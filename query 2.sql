@@ -1,4 +1,4 @@
-# List all venues along with their associated complex name
+# List all venues along with their associated complex name.
 select v.venue_name,c.complex_name
 from venues_data v left join complex_data c
 on v.complex_id=c.complex_id;
@@ -12,10 +12,10 @@ ORDER BY venue_count DESC;
 
 #Get details of venues in a specific country (e.g., Chile)
 select * from venues_data
-where venue_country_name = 'chile';
+where country_name = 'chile';
 
 # Identify all venues and their timezones
-select venue_name,venue_timezone
+select venue_name, timezone
 from venues_data;
 
 #Find complexes that have more than one venue
@@ -28,11 +28,11 @@ having venue_count>1;
 
 #List venues grouped by country
 
-SELECT venue_country_code, 
+SELECT country_code, 
        COUNT(venue_id) AS venue_count, 
        GROUP_CONCAT(venue_name SEPARATOR ', ') AS venue_names
 FROM venues_data
-GROUP BY venue_country_code;
+GROUP BY country_code;
 
 #Find all venues for a specific complex (e.g., Nacional)
 

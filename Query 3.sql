@@ -1,5 +1,3 @@
-desc competitor_data;
-
 # Get all competitors with their rank and points.
 select b.competitor_name,a.competitor_rank,a.competitor_points
 from competitor_rankings_data a right join competitor_data b
