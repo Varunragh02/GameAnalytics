@@ -1,11 +1,9 @@
 import requests
 import json
 import pandas as pd
-import mysql.connector
 import schedule
 import time
-from sqlalchemy import create_engine, String
-from sqlalchemy.sql import text
+from sqlalchemy import create_engine, text
 
 # API URL and headers
 url = "https://api.sportradar.com/tennis/trial/v3/en/complexes.json?api_key=3dUQ9pQLy122TLHBCb7eInTMSRRHBh56RqYciW8b"
@@ -17,15 +15,10 @@ engine = create_engine("mysql+mysqlconnector://root:Selvamk1403#@localhost/gamea
 # Function to fetch and store data
 def fetch_and_store():
     try:
-        # Sending GET request and getting response text
+        # Sending GET request
         response = requests.get(url, headers=headers)
-        print("API Response:")
-        print(response.text)
-
-        # Parsing JSON
-        data = json.loads(response.text)
-        print("JSON Data:")
-        print(data)
+        response.raise_for_status()  # Raise an error for HTTP errors
+        data = response.json()
 
         # Extracting data from JSON
         complexes = data.get('complexes', [])
@@ -39,8 +32,11 @@ def fetch_and_store():
             complex_id = complex_item.get('id', None)
             complex_name = complex_item.get('name', None)
 
-            # Extract venues from each complex
-            venues = complex_item.get('venues', [])
+            # Append complex data
+            complex_data.append([complex_id, complex_name])
+
+            # Extract and iterate over venues (Fix applied here)
+            venues = complex_item.get('venues', [])  # Ensure venues is a list
             for venue in venues:
                 venue_id = venue.get('id', None)
                 venue_name = venue.get('name', None)
@@ -49,8 +45,7 @@ def fetch_and_store():
                 country_code = venue.get('country_code', None)
                 timezone = venue.get('timezone', None)
 
-                # Append data
-                complex_data.append([complex_id, complex_name])
+                # Append venue data
                 venues_data.append([venue_id, venue_name, city_name, country_name, country_code, timezone, complex_id])
 
         # Create DataFrames
@@ -61,11 +56,15 @@ def fetch_and_store():
         df_complex.drop_duplicates(inplace=True)
         df_venues.drop_duplicates(inplace=True)
 
-        # Debugging: Print DataFrames before inserting into MySQL
+        # Debugging: Print DataFrames
         print("Complex Data:")
         print(df_complex.head())
         print("\nVenues Data:")
         print(df_venues.head())
+
+        if df_complex.empty or df_venues.empty:
+            print("No new data to insert into MySQL.")
+            return
 
         with engine.begin() as conn:
             try:
@@ -75,7 +74,7 @@ def fetch_and_store():
                     VALUES (:complex_id, :complex_name)
                     ON DUPLICATE KEY UPDATE complex_name = VALUES(complex_name);
                 """)
-                complex_data_dicts = [{"complex_id": row[0], "complex_name": row[1]} for row in df_complex.values]
+                complex_data_dicts = df_complex.to_dict(orient='records')
                 conn.execute(complex_sql, complex_data_dicts)
 
                 # Insert or Update Venues Data
@@ -90,19 +89,16 @@ def fetch_and_store():
                         timezone = VALUES(timezone),
                         complex_id = VALUES(complex_id);
                 """)
-                venues_data_dicts = [
-                    {
-                        "venue_id": row[0], "venue_name": row[1], "city_name": row[2],
-                        "country_name": row[3], "country_code": row[4], "timezone": row[5], "complex_id": row[6]
-                    } for row in df_venues.values
-                ]
+                venues_data_dicts = df_venues.to_dict(orient='records')
                 conn.execute(venues_sql, venues_data_dicts)
 
-                print("Data inserted successfully into MySQL with foreign key constraint!")
+                print("Data inserted successfully into MySQL!")
 
             except Exception as db_err:
                 print("Database Insert Error:", db_err)
 
+    except requests.exceptions.RequestException as api_err:
+        print("API Request Error:", api_err)
     except Exception as e:
         print("An error occurred:", e)
 
@@ -114,4 +110,4 @@ if __name__ == "__main__":
     fetch_and_store()  # Run once immediately
     while True:
         schedule.run_pending()
-        time.sleep(60)  # Check every minute
+        time.sleep(60)  # Check every minute.

@@ -1,86 +1,138 @@
-import streamlit as st
+import requests
+import json
 import pandas as pd
 import mysql.connector
-from sqlalchemy import create_engine
-import plotly.express as px
+import schedule
+import time
+from sqlalchemy import create_engine, String
+from sqlalchemy.sql import text
 
-# Database connection setup
-DB_URL = "mysql+mysqlconnector://root:Selvamk1403#@localhost/gameanalytics"
-engine = create_engine(DB_URL)
+# API URL & Headers
+url = "https://api.sportradar.com/tennis/trial/v3/en/double_competitors_rankings.json?api_key=3dUQ9pQLy122TLHBCb7eInTMSRRHBh56RqYciW8b"
+headers = {"accept": "application/json"}
 
-def load_data(table_name, engine):
-    """Fetch data from MySQL table."""
+# Database connection
+engine = create_engine("mysql+mysqlconnector://root:Selvamk1403#@localhost/gameanalytics")
+
+# Function to fetch and store data
+def fetch_and_store():
     try:
-        query = "SELECT * FROM {}".format(table_name)  # Correct format usage
-        return pd.read_sql(query, con=engine)
+        response = requests.get(url, headers=headers)
+        print("API Response:")
+        print(response.text)
+
+        # Parsing JSON
+        data = json.loads(response.text)
+        print("JSON Data:")
+        print(data)
+
+        # Extract rankings list
+        rankings_list = data.get('rankings', [])
+        competitor_rankings = rankings_list[0].get('competitor_rankings', []) if rankings_list else []
+
+        # Lists to store data
+        competitor_data = []
+        competitor_rankings_data = []
+
+        # Process rankings
+        for ranking in competitor_rankings:
+            competitor = ranking.get('competitor', {})
+
+            # Extract competitor details
+            competitor_id = competitor.get('id')
+            competitor_name = competitor.get('name')
+            competitor_country = competitor.get('country')
+            competitor_country_code = competitor.get('country_code')
+            competitor_abbreviation = competitor.get('abbreviation')
+
+            # Store competitor data
+            competitor_data.append([
+                competitor_id, competitor_name, competitor_country,
+                competitor_country_code, competitor_abbreviation
+            ])
+
+            # Extract ranking details
+            competitor_rank = ranking.get('rank')
+            competitor_movement = ranking.get('movement')
+            competitor_points = ranking.get('points')
+            competitions_played = ranking.get('competitions_played')
+
+            # Store ranking data
+            competitor_rankings_data.append([
+                competitor_rank, competitor_movement, competitor_points,
+                competitions_played, competitor_id
+            ])
+
+        # Convert to DataFrames
+        df_competitors = pd.DataFrame(competitor_data, columns=[
+            'competitor_id', 'competitor_name', 'competitor_country',
+            'competitor_country_code', 'competitor_abbreviation'
+        ])
+        df_rankings = pd.DataFrame(competitor_rankings_data, columns=[
+            'competitor_rank', 'competitor_movement', 'competitor_points',
+            'competitions_played', 'competitor_id'
+        ])
+
+        # Remove duplicates
+        df_competitors.drop_duplicates(inplace=True)
+        df_rankings.drop_duplicates(inplace=True)
+
+        # Debugging: Print DataFrames
+        print("Competitor Data:")
+        print(df_competitors.head())
+        print("\nRanking Data:")
+        print(df_rankings.head())
+
+        # Check if data is empty before inserting into MySQL
+        if df_competitors.empty or df_rankings.empty:
+            print("Error: DataFrames are empty, no data to insert into MySQL.")
+            return
+
+        with engine.begin() as conn:
+            # Insert or Update Competitor Data
+            competitor_sql = text("""
+                INSERT INTO competitor_data (
+                    competitor_id, competitor_name, competitor_country,
+                    competitor_country_code, competitor_abbreviation
+                ) VALUES (
+                    :competitor_id, :competitor_name, :competitor_country,
+                    :competitor_country_code, :competitor_abbreviation
+                ) ON DUPLICATE KEY UPDATE 
+                    competitor_name = VALUES(competitor_name),
+                    competitor_country = VALUES(competitor_country),
+                    competitor_country_code = VALUES(competitor_country_code),
+                    competitor_abbreviation = VALUES(competitor_abbreviation);
+            """)
+            competitor_data_dicts = df_competitors.to_dict(orient='records')
+            conn.execute(competitor_sql, competitor_data_dicts)
+
+            # Insert or Update Rankings Data
+            rankings_sql = text("""
+                INSERT INTO competitor_rankings_data (
+                    competitor_rank, competitor_movement, competitor_points,
+                    competitions_played, competitor_id
+                ) VALUES (
+                    :competitor_rank, :competitor_movement, :competitor_points,
+                    :competitions_played, :competitor_id
+                ) ON DUPLICATE KEY UPDATE 
+                    competitor_movement = VALUES(competitor_movement),
+                    competitor_points = VALUES(competitor_points),
+                    competitions_played = VALUES(competitions_played);
+            """)
+            rankings_data_dicts = df_rankings.to_dict(orient='records')
+            conn.execute(rankings_sql, rankings_data_dicts)
+
+            print("Data inserted successfully into MySQL!")
+
     except Exception as e:
-        st.error("Error loading {}: {}".format(table_name, e))
-        return pd.DataFrame()
+        print("An error occurred:", e)
 
-# Load all datasets
-st.title("🎾 Tennis Data Dashboard")
-st.write("Explore various datasets related to tennis competitions, venues, and rankings.")
+# Schedule script to run every 6 hours
+schedule.every(6).hours.do(fetch_and_store)
 
-# Sidebar Navigation
-st.sidebar.title("Navigation")
-page = st.sidebar.radio("Go to", ["Competitions", "Venues", "Rankings", "Search Competitor"])
-
-if page == "Competitions":
-    st.header("🏆 Tennis Competitions")
-    df_competitions = load_data("competition_data")
-    st.dataframe(df_competitions, use_container_width=True)
-
-elif page == "Venues":
-    st.header("📍 Tennis Venues")
-    df_venues = load_data("venues_data")
-    st.dataframe(df_venues)
-
-elif page == "Rankings":
-    st.header("📊 Player Rankings")
-    df_rankings = load_data("competitor_rankings_data")
-    df_competitors = load_data("competitor_data")
-
-    if not df_rankings.empty and not df_competitors.empty:
-        df = df_rankings.merge(df_competitors, on="competitor_id", how="left")
-        
-        # Rank Range Filter
-        min_rank, max_rank = st.sidebar.slider("Select Rank Range", 1, 100, (1, 10))
-        df = df[(df["competitor_rank"] >= min_rank) & (df["competitor_rank"] <= max_rank)]
-        
-        st.write("### Filtered Rankings")
-        st.dataframe(df[['competitor_rank', 'competitor_name', 'competitor_country', 'competitor_points']])
-
-        fig = px.bar(df, x="competitor_name", y="competitor_points", 
-                     title="Players by Points", color="competitor_points")
-        st.plotly_chart(fig)
-
-elif page == "Search Competitor":
-    st.header("🔍 Search Competitor")
-    search_name = st.text_input("Enter Competitor Name")
-    
-    if search_name:
-        df_competitors = load_data("competitor_data")
-        df_rankings = load_data("competitor_rankings_data")
-        df_competitions = load_data("competition_data")
-        
-        df = df_rankings.merge(df_competitors, on="competitor_id", how="left")
-        df = df[df["competitor_name"].str.contains(search_name, case=False, na=False)]
-        
-        if not df.empty:
-            st.write("### Competitor Details")
-            
-            for _, row in df.iterrows():
-               col1, col2, col3 = st.columns(3)
-               col1.write(f"🏆 **Name:** {row['competitor_name']}")
-               col2.write(f"🌍 **Country:** {row['competitor_country']}")
-               col3.write(f"📊 **Rank:** {row['competitor_rank']}")
-               
-               col1.write(f"🔥 **Points:** {row['competitor_points']}")
-               col2.write(f"📅 **Competitions Played:** {row['competitions_played']}")
-               col3.write(f"🔄 **Movement:** {row['competitor_movement']}")
-        
-               st.markdown("---")  # Adds a horizontal separator
-        else:
-            st.write("No competitor found with that name.")
-
-st.sidebar.write("Developed with ❤️ using Streamlit and MySQL")
+# Run script continuously
+if __name__ == "__main__":
+    fetch_and_store()  # Run once immediately
+    while True:
+        schedule.run_pending()
+        time.sleep(60)  # Check every minute

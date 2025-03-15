@@ -1,7 +1,6 @@
 import requests
 import json
 import pandas as pd
-import logging
 import mysql.connector
 import schedule
 import time
@@ -70,7 +69,7 @@ def fetch_and_store():
                     VALUES (:category_id, :category_name)
                     ON DUPLICATE KEY UPDATE category_name = VALUES(category_name);
                 """)
-                category_data_dicts = [{"category_id": row[0], "category_name": row[1]} for row in df_category.values]
+                category_data_dicts = df_category.to_dict(orient='records')
                 conn.execute(category_sql, category_data_dicts)
 
                 # Convert lists to tuples and Insert Competition Data
@@ -92,11 +91,12 @@ def fetch_and_store():
                 ]
                 conn.execute(competition_sql, competition_data_dicts)
 
-                print("✅ Data inserted successfully into MySQL with foreign key constraint!")
+                print(" Data inserted successfully into MySQL with foreign key constraint!")
 
             except Exception as db_err:
                 print("Database Insert Error:", db_err)
-
+    except requests.exceptions.RequestException as api_err:
+        print("API Request Error:", api_err)
     except Exception as e:
         print("An error occurred:", e)
 
